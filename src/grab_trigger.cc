@@ -1,26 +1,18 @@
 #include "MvCameraControl.h"
 #include "cv_bridge/cv_bridge.h"
-#include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/Image.h"
 #include <chrono>
 #include <fcntl.h>
 #include <iostream>
 #include <opencv2/opencv.hpp>
 #include <pthread.h>
-#include <rclcpp/rclcpp.hpp>
+#include <ros/ros.h>
 #include <signal.h>
 #include <stdio.h>
 #include <sys/ipc.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
-// 日志输出 port to ROS2
-#define ROS_INFO(...) RCLCPP_INFO(rclcpp::get_logger("mvs_driver"), __VA_ARGS__)
-#define ROS_ERROR(...)                                                         \
-  RCLCPP_ERROR(rclcpp::get_logger("mvs_driver"), __VA_ARGS__)
-#define ROS_WARN(...) RCLCPP_WARN(rclcpp::get_logger("mvs_driver"), __VA_ARGS__)
-#define ROS_DEBUG(...)                                                         \
-  RCLCPP_DEBUG(rclcpp::get_logger("mvs_driver"), __VA_ARGS__)
 
 using namespace std;
 
@@ -42,7 +34,7 @@ enum PixelFormat : unsigned int {
 bool is_undistorted = true;
 bool exit_flag = false;
 int width, height;
-rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub;
+ros::Publisher pub;
 std::vector<PixelFormat> PIXEL_FORMAT = {RGB8, BayerRG8, BayerRG12Packed,
                                          BayerGB12Packed, BayerGB8};
 std::string ExposureAutoStr[3] = {"Off", "Once", "Continues"};
@@ -192,6 +184,7 @@ void SignalHandler(int signal) {
   if (signal == SIGINT) { // 捕捉 Ctrl + C 触发的 SIGINT 信号
     fprintf(stderr, "\nReceived Ctrl+C, exiting...\n");
     exit_flag = true; // 设置退出标志
+    ros::shutdown();
   }
 }
 
@@ -239,7 +232,7 @@ static void *WorkThread(void *pUser) {
   // }
 
   ROS_INFO("Capture loop start.");
-  while (!exit_flag && rclcpp::ok()) {
+  while (!exit_flag && ros::ok()) {
 
     // nRet = MV_CC_GetOneFrameTimeout(pUser, pData, stParam.nCurValue * 3,
     //                                 &stImageInfo, 1000);
@@ -248,23 +241,22 @@ static void *WorkThread(void *pUser) {
 
     if (nRet == MV_OK) {
 
-      rclcpp::Time rcv_time;
+      ros::Time rcv_time;
       if (trigger_enable && pointt != MAP_FAILED && pointt->low != 0) {
         // 触发模式
         // 赋值共享内存中的时间戳给相机帧
         int64_t b = pointt->low;
-        double time_pc = b / 1000000000.0;
-        rcv_time =
-            rclcpp::Time(static_cast<int64_t>(time_pc * 1e9)); // 转换为纳
+        uint64_t nsec = static_cast<uint64_t>(b);
+        rcv_time = ros::Time(nsec / 1000000000ULL, nsec % 1000000000ULL);
       } else {
         // 自动模式 使用 ROS 系统时钟 // TODO 确认此处是否会产生影响
-        rcv_time = rclcpp::Clock(RCL_SYSTEM_TIME).now();
+        rcv_time = ros::Time::now();
       }
 
       std::string debug_msg;
       debug_msg = "GetOneFrame,nFrameNum[" +
                   std::to_string(stImageInfo.stFrameInfo.nFrameNum) +
-                  "], FrameTime:" + std::to_string(rcv_time.seconds());
+                  "], FrameTime:" + std::to_string(rcv_time.toSec());
       ROS_DEBUG(debug_msg.c_str());
 
       pDataForRGB = (unsigned char *)malloc(
@@ -334,7 +326,7 @@ static void *WorkThread(void *pUser) {
       } else {
         ROS_WARN("Invalid image_scale: %f. Skipping resize.", image_scale);
       }
-      sensor_msgs::msg::Image msg;
+      sensor_msgs::Image msg;
       msg.header.stamp = rcv_time;
       msg.height = srcImage.rows;
       msg.width = srcImage.cols;
@@ -344,9 +336,9 @@ static void *WorkThread(void *pUser) {
       msg.data.assign(srcImage.data,
                       srcImage.data + srcImage.total() *
                       srcImage.elemSize());
-      // msg.header.stamp = rclcpp::Clock().now();
+      // msg.header.stamp = ros::Time::now();
 
-      pub->publish(msg);
+      pub.publish(msg);
     } else {
       ROS_WARN("Capture timeout, retrying...");
     }
@@ -367,7 +359,7 @@ static void *WorkThread(void *pUser) {
 
 int main(int argc, char **argv) {
 
-  rclcpp::init(argc, argv);
+  ros::init(argc, argv, "mvs_trigger", ros::init_options::NoSigintHandler);
   std::string params_file = std::string(argv[1]);
   // cv::FileStorage Params(params_file, cv::FileStorage::READ);
   // trigger_enable = Params["TriggerEnable"];
@@ -377,7 +369,6 @@ int main(int argc, char **argv) {
 
   int nRet = MV_OK;
   void *handle = NULL;
-  rclcpp::Rate loop_rate(10);
   cv::FileStorage Params(params_file, cv::FileStorage::READ);
   if (!Params.isOpened()) {
     string msg = "Failed to open settings file at:" + params_file;
@@ -390,8 +381,8 @@ int main(int argc, char **argv) {
   std::string pub_topic = Params["TopicName"];
   int PixelFormat = Params["PixelFormat"];
 
-  auto node = rclcpp::Node::make_shared("mvs_trigger");
-  pub = node->create_publisher<sensor_msgs::msg::Image>(pub_topic, 10);
+  ros::NodeHandle nh;
+  pub = nh.advertise<sensor_msgs::Image>(pub_topic, 10);
 
   const char *user_name = getlogin();
   std::string path_for_time_stamp =
@@ -546,8 +537,8 @@ int main(int argc, char **argv) {
   }
   ROS_INFO("Start Grabbing thread Success, pid %ld", nThreadID);
 
-  while (!exit_flag && rclcpp::ok()) {
-    rclcpp::spin_some(node);
+  while (!exit_flag && ros::ok()) {
+    ros::spinOnce();
     usleep(100000);
   }
 

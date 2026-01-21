@@ -82,14 +82,75 @@ def load_camera_info(yaml_path):
         # 解析失败（大概率因为 %YAML:1.0 头），直接走 FileStorage
         return _load_via_cvfs(yaml_path)
 def pick_image_points(img_path, num_points):
+    """
+    使用 matplotlib 事件回调，只在 Shift+左键 点击时记录点。
+    选满 num_points 自动结束；也可以按 Enter 提前结束。
+    """
     img = np.array(Image.open(img_path))
-    plt.figure("Image - pick {} points".format(num_points))
-    plt.imshow(img)
-    plt.axis('off')
-    print(f"请在图像窗口中依次点击 {num_points} 个点，然后回车。")
-    pts = plt.ginput(num_points, timeout=0)
-    plt.close()
-    return np.array(pts, dtype=float)  # shape (N,2)
+
+    fig, ax = plt.subplots(num= "Image - pick {} (Shift+左键)".format(num_points))
+    ax.imshow(img)
+    ax.axis('off')
+
+    picked = []
+    shift_down = [False]   # 用可变对象在闭包里共享
+    scatter = None
+    title_text = ax.set_title(f"Shift + click {num_points}:0/{num_points}")
+
+    def redraw():
+        nonlocal scatter
+        if scatter is not None:
+            scatter.remove()
+        if picked:
+            xs = [p[0] for p in picked]
+            ys = [p[1] for p in picked]
+            scatter = ax.scatter(xs, ys, s=40, marker='x')
+        title_text.set_text(f"Shift + click {num_points}:{len(picked)}/{num_points}")
+        fig.canvas.draw_idle()
+
+    def on_key_press(event):
+        # Matplotlib 的 event.key 可能是 'shift' 或 'shift+...'；统一判断
+        if event.key and 'shift' in event.key.lower():
+            shift_down[0] = True
+        # Enter/Return 提前结束
+        if event.key in ('enter', 'return'):
+            plt.close(fig)
+
+    def on_key_release(event):
+        if event.key and 'shift' in event.key.lower():
+            shift_down[0] = False
+
+    def on_click(event):
+        # 只在图像坐标内、左键、且按着 Shift 时记录
+        if event.inaxes != ax:
+            return
+        if event.button != 1:   # 1=左键
+            return
+        # 有些后端会把 shift 状态放在 event.key，也可能为 None；我们用 shift_down 记录
+        if not shift_down[0] and not (getattr(event, "key", None) and 'shift' in str(event.key).lower()):
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+
+        picked.append((float(event.xdata), float(event.ydata)))
+        redraw()
+
+        if len(picked) >= num_points:
+            plt.close(fig)
+
+    cid_kp = fig.canvas.mpl_connect('key_press_event', on_key_press)
+    cid_kr = fig.canvas.mpl_connect('key_release_event', on_key_release)
+    cid_bt = fig.canvas.mpl_connect('button_press_event', on_click)
+
+    print(f"请在图像窗口中 **按住 Shift + 左键** 依次点击 {num_points} 个点；按 Enter 可提前结束。")
+    redraw()
+    plt.show()
+
+    fig.canvas.mpl_disconnect(cid_kp)
+    fig.canvas.mpl_disconnect(cid_kr)
+    fig.canvas.mpl_disconnect(cid_bt)
+
+    return np.array(picked, dtype=float)  # shape (M,2)；若提前结束，M 可能 < num_points
 
 def pick_pointcloud_points(ply_path, num_points):
     pcd = o3d.io.read_point_cloud(ply_path)

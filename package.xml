@@ -1,6 +1,5 @@
 <?xml version="1.0"?>
-<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
-<package format="3">
+<package format="2">
   <name>mvs_ros2_driver</name>
   <version>0.0.0</version>
   <description>The mvs_ros2_driver package</description>
@@ -8,23 +7,15 @@
   <maintainer email="zhengcr@todo.todo">xuankuzcr</maintainer>
   <license>Apache License 2.0</license>
 
-  <!-- 构建工具依赖 -->
-  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>catkin</buildtool_depend>
 
-  <!-- 编译和运行时依赖 -->
-  <depend>rclcpp</depend>
-  <depend>cv_bridge</depend>
-  <depend>image_transport</depend>
+  <depend>roscpp</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
-  <depend>OpenCV</depend>
-  <exec_depend>launch_ros</exec_depend>
-
-  <!-- 测试依赖 -->
-  <test_depend>ament_lint_auto</test_depend>
-  <test_depend>ament_lint_common</test_depend>
+  <depend>cv_bridge</depend>
+  <depend>image_transport</depend>
+  <depend>opencv2</depend>
 
   <export>
-    <build_type>ament_cmake</build_type>
   </export>
 </package>
