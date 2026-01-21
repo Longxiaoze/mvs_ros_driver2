@@ -3,10 +3,10 @@
 #--------------------------------------------------------------------------------------------
 # Camera Parameters. Adjust them!
 #--------------------------------------------------------------------------------------------
-SerialNumber: "DA2099368" # Not needed for single camera. Specify serial number for multiple cameras. 
+SerialNumber: "DA7028356" # Not needed for single camera. Specify serial number for multiple cameras. 
 TopicName: "front_camera/image_raw"
 
-TriggerEnable: 1 # 0 stands for Off, 1 stands for On
+TriggerEnable: 0 # 0 stands for Off, 1 stands for On
 
 #ExposureAutoMode: 0 # 0 stands for Off, 1 stands for Once, 2 stands for Continues
 #ExposureTime: 25000 # us
