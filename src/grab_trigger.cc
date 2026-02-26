@@ -2,9 +2,11 @@
 #include "cv_bridge/cv_bridge.h"
 #include "sensor_msgs/Image.h"
 #include <chrono>
+#include <cstdlib>
 #include <fcntl.h>
 #include <iostream>
 #include <opencv2/opencv.hpp>
+#include <pwd.h>
 #include <pthread.h>
 #include <ros/ros.h>
 #include <signal.h>
@@ -20,7 +22,7 @@ struct time_stamp {
   int64_t high;
   int64_t low;
 };
-time_stamp *pointt;
+time_stamp *pointt = reinterpret_cast<time_stamp *>(MAP_FAILED);
 
 enum PixelFormat : unsigned int {
   RGB8 = 0x02180014,
@@ -42,6 +44,22 @@ std::string GammaSlectorStr[3] = {"User", "sRGB", "Off"};
 std::string GainAutoStr[3] = {"Off", "Once", "Continues"};
 float image_scale = 0.0;
 int trigger_enable = 1;
+
+bool ResolveHomeDirectory(std::string &home_dir) {
+  const char *home_env = std::getenv("HOME");
+  if (home_env != nullptr && home_env[0] != '\0') {
+    home_dir = home_env;
+    return true;
+  }
+
+  const struct passwd *pw = getpwuid(getuid());
+  if (pw != nullptr && pw->pw_dir != nullptr && pw->pw_dir[0] != '\0') {
+    home_dir = pw->pw_dir;
+    return true;
+  }
+
+  return false;
+}
 
 bool PrintDeviceInfo(MV_CC_DEVICE_INFO *pstMVDevInfo) {
   if (NULL == pstMVDevInfo) {
@@ -360,7 +378,11 @@ static void *WorkThread(void *pUser) {
 int main(int argc, char **argv) {
 
   ros::init(argc, argv, "mvs_trigger", ros::init_options::NoSigintHandler);
-  std::string params_file = std::string(argv[1]);
+  if (argc < 2 || argv[1] == nullptr || argv[1][0] == '\0') {
+    ROS_ERROR("Missing config file path. Usage: mvs_camera_node <config.yaml>");
+    return -1;
+  }
+  std::string params_file(argv[1]);
   // cv::FileStorage Params(params_file, cv::FileStorage::READ);
   // trigger_enable = Params["TriggerEnable"];
   // std::string expect_serial_number = Params["SerialNumber"];
@@ -384,13 +406,29 @@ int main(int argc, char **argv) {
   ros::NodeHandle nh;
   pub = nh.advertise<sensor_msgs::Image>(pub_topic, 10);
 
-  const char *user_name = getlogin();
-  std::string path_for_time_stamp =
-      "/home/" + std::string(user_name) + "/timeshare";
+  std::string home_dir;
+  if (!ResolveHomeDirectory(home_dir)) {
+    ROS_ERROR("Failed to resolve home directory for shared timestamp file.");
+    return -1;
+  }
+  std::string path_for_time_stamp = home_dir + "/timeshare";
   const char *shared_file_name = path_for_time_stamp.c_str();
   int fd = open(shared_file_name, O_RDWR);
-  pointt = (time_stamp *)mmap(NULL, sizeof(time_stamp), PROT_READ | PROT_WRITE,
-                              MAP_SHARED, fd, 0);
+  if (fd < 0) {
+    ROS_WARN("Failed to open shared timestamp file at %s. Fallback to ROS "
+             "timestamps.",
+             shared_file_name);
+    pointt = reinterpret_cast<time_stamp *>(MAP_FAILED);
+  } else {
+    pointt = (time_stamp *)mmap(NULL, sizeof(time_stamp), PROT_READ | PROT_WRITE,
+                                MAP_SHARED, fd, 0);
+    if (pointt == MAP_FAILED) {
+      ROS_WARN("Failed to map shared timestamp file at %s. Fallback to ROS "
+               "timestamps.",
+               shared_file_name);
+    }
+    close(fd);
+  }
 
   SetupSignalHandler();
 
@@ -568,7 +606,9 @@ int main(int argc, char **argv) {
   }
   ROS_INFO("MV_CC_DestroyHandle success!");
 
-  munmap(pointt, sizeof(time_stamp));
+  if (pointt != nullptr && pointt != MAP_FAILED) {
+    munmap(pointt, sizeof(time_stamp));
+  }
 
   return 0;
 }

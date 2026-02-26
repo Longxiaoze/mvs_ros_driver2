@@ -14,7 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   image_transport
 )
 
-find_package(OpenCV REQUIRED)
+find_package(OpenCV 4.2.0 REQUIRED)
 
 catkin_package(
   CATKIN_DEPENDS roscpp sensor_msgs std_msgs cv_bridge image_transport
