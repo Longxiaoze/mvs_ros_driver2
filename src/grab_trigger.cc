@@ -1,7 +1,10 @@
 #include "MvCameraControl.h"
 #include "cv_bridge/cv_bridge.h"
 #include "sensor_msgs/msg/image.hpp"
+#include <cerrno>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
 #include <iostream>
 #include <opencv2/opencv.hpp>
@@ -23,6 +26,25 @@
   RCLCPP_DEBUG(rclcpp::get_logger("mvs_driver"), __VA_ARGS__)
 
 using namespace std;
+
+class MvsSdkSession {
+public:
+  MvsSdkSession() : status_(MV_CC_Initialize()) {}
+
+  ~MvsSdkSession() {
+    if (status_ == MV_OK) {
+      MV_CC_Finalize();
+    }
+  }
+
+  int status() const { return status_; }
+
+  MvsSdkSession(const MvsSdkSession &) = delete;
+  MvsSdkSession &operator=(const MvsSdkSession &) = delete;
+
+private:
+  int status_;
+};
 
 struct time_stamp {
   int64_t high;
@@ -368,6 +390,12 @@ static void *WorkThread(void *pUser) {
 int main(int argc, char **argv) {
 
   rclcpp::init(argc, argv);
+  if (argc < 2 || argv[1] == nullptr) {
+    ROS_ERROR("Usage: mvs_camera_node <settings_file>");
+    rclcpp::shutdown();
+    return -1;
+  }
+
   std::string params_file = std::string(argv[1]);
   // cv::FileStorage Params(params_file, cv::FileStorage::READ);
   // trigger_enable = Params["TriggerEnable"];
@@ -375,7 +403,13 @@ int main(int argc, char **argv) {
   // std::string pub_topic = Params["TopicName"];
   // int PixelFormat = Params["PixelFormat"];
 
-  int nRet = MV_OK;
+  MvsSdkSession sdk_session;
+  int nRet = sdk_session.status();
+  if (MV_OK != nRet) {
+    ROS_ERROR("MV_CC_Initialize fail! nRet [%x]", nRet);
+    return -1;
+  }
+
   void *handle = NULL;
   rclcpp::Rate loop_rate(10);
   cv::FileStorage Params(params_file, cv::FileStorage::READ);
@@ -393,13 +427,30 @@ int main(int argc, char **argv) {
   auto node = rclcpp::Node::make_shared("mvs_trigger");
   pub = node->create_publisher<sensor_msgs::msg::Image>(pub_topic, 10);
 
-  const char *user_name = getlogin();
-  std::string path_for_time_stamp =
-      "/home/" + std::string(user_name) + "/timeshare";
+  const char *home_dir = std::getenv("HOME");
+  if (home_dir == nullptr || home_dir[0] == '\0') {
+    ROS_ERROR("HOME environment variable is not set");
+    return -1;
+  }
+
+  std::string path_for_time_stamp = std::string(home_dir) + "/timeshare";
   const char *shared_file_name = path_for_time_stamp.c_str();
   int fd = open(shared_file_name, O_RDWR);
+  if (fd == -1) {
+    ROS_ERROR("Failed to open timestamp file %s: %s", shared_file_name,
+              std::strerror(errno));
+    return -1;
+  }
+
   pointt = (time_stamp *)mmap(NULL, sizeof(time_stamp), PROT_READ | PROT_WRITE,
                               MAP_SHARED, fd, 0);
+  if (pointt == MAP_FAILED) {
+    ROS_ERROR("Failed to map timestamp file %s: %s", shared_file_name,
+              std::strerror(errno));
+    close(fd);
+    return -1;
+  }
+  close(fd);
 
   SetupSignalHandler();
 

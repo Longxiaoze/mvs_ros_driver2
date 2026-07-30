@@ -14,6 +14,7 @@ def generate_launch_description():
         name='mvs_camera_trigger',
         arguments=[os.path.join(pkg_dir, 'config/left_camera_trigger.yaml'), '--ros-args', '--log-level', 'info'],
         respawn=True,
+        respawn_delay=2.0,
         output='screen',
         # 调试模式 (取消注释以启用)
         # launch_prefix=['xterm', '-e', 'gdb', '-ex', 'run', '--args']
